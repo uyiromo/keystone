@@ -45,6 +45,16 @@ set(LINUX_SIFIVE FALSE CACHE BOOL "Build linux for sifive")
 set(sifive ${LINUX_SIFIVE})
 message(STATUS "sifive=${sifive}")
 
+# Enable Linux build for vc707-u500devkit
+set(LINUX_VC707 FALSE CACHE BOOL "Build linux for vc707-u500devkit")
+set(vc707 ${LINUX_VC707})
+message(STATUS "vc707=${vc707}")
+
+# Enable buildroot excluding for vc707-u500devkit
+set(NO_BR2 FALSE CACHE BOOL "Build linux without buildroot")
+set(no_br2 ${NO_BR2})
+message(STATUS "no_br2=${no_br2}")
+
 if((CMAKE_BUILD_TYPE MATCHES "Debug") OR (CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo"))
   message(STATUS "Using debug symbols")
   set(CFLAGS -g)
@@ -81,6 +91,19 @@ set(overlay_root ${overlay_dir}/root)
 if(firesim)
   message(STATUS "Using Linux defconfig: ${linux_defconfig}")
 	set(initramfs true)
+elseif(vc707)
+  message(STATUS "vc707-u500devkit configs and patches.")
+  if(no_br2)
+    set(linux_defconfig ${confdir}/linux64-vc707-nobr2-defconfig)
+    message(STATUS "Using Linux defconfig: ${linux_defconfig}")
+    set(initramfs false)
+    message(STATUS "  Linux WITHOUT buildroot")
+  else()
+    set(linux_defconfig ${confdir}/linux64-vc707-defconfig)
+    message(STATUS "Using Linux defconfig: ${linux_defconfig}")
+    set(initramfs true)
+    message(STATUS "  Linux WITH buildroot")
+  endif()
 elseif(sifive)
   message(STATUS "SiFive Unleashed configs and patches. Forcing initramfs=y")
 	set(linux_defconfig ${confdir}/linux64-sifive-defconfig)
@@ -128,24 +151,25 @@ add_custom_command(OUTPUT ${qemu_wrkdir}/config-host.mak
 ## COMPONENT: buildroot
 ###############################################################################
 
-add_custom_command(OUTPUT ${overlay_root} COMMAND mkdir -p ${overlay_root})
-add_custom_command(OUTPUT ${overlay_dir} COMMAND mkdir -p ${overlay_dir})
-add_custom_command(OUTPUT ${buildroot_wrkdir} COMMAND mkdir -p ${buildroot_wrkdir})
-add_custom_target("buildroot" ALL DEPENDS ${buildroot_srcdir} ${buildroot_wrkdir}/.config ${overlay_root} ${buildroot_wrkdir}
-  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH} O=${buildroot_wrkdir}
-  COMMENT "Building buildroot"
-)
+if (initramfs)
+  add_custom_command(OUTPUT ${overlay_root} COMMAND mkdir -p ${overlay_root})
+  add_custom_command(OUTPUT ${overlay_dir} COMMAND mkdir -p ${overlay_dir})
+  add_custom_command(OUTPUT ${buildroot_wrkdir} COMMAND mkdir -p ${buildroot_wrkdir})
+  add_custom_target("buildroot" ALL DEPENDS ${buildroot_srcdir} ${buildroot_wrkdir}/.config ${overlay_root} ${buildroot_wrkdir}
+    COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH} O=${buildroot_wrkdir}
+    COMMENT "Building buildroot"
+    )
 
-string(REPLACE "/" "\\/" overlay_dir_stripped ${overlay_dir})
-add_custom_command(DEPENDS ${buildroot_config} OUTPUT ${buildroot_wrkdir}/.config
-  COMMAND mkdir -p ${buildroot_wrkdir}
-  COMMAND cp ${buildroot_config} ${buildroot_wrkdir}/.config
-  COMMAND sed \"s/^BR2_ROOTFS_OVERLAY=.*/BR2_ROOTFS_OVERLAY=\\\"${overlay_dir_stripped}\\\"/g\" -i ${buildroot_wrkdir}/.config
-  COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH}
+  string(REPLACE "/" "\\/" overlay_dir_stripped ${overlay_dir})
+  add_custom_command(DEPENDS ${buildroot_config} OUTPUT ${buildroot_wrkdir}/.config
+    COMMAND mkdir -p ${buildroot_wrkdir}
+    COMMAND cp ${buildroot_config} ${buildroot_wrkdir}/.config
+    COMMAND sed \"s/^BR2_ROOTFS_OVERLAY=.*/BR2_ROOTFS_OVERLAY=\\\"${overlay_dir_stripped}\\\"/g\" -i ${buildroot_wrkdir}/.config
+    COMMAND $(MAKE) -s -C ${buildroot_srcdir} RISCV=$ENV{RISCV} PATH=$ENV{PATH}
     O=${buildroot_wrkdir} CROSS_COMPILE=${cross_compile} olddefconfig
-  COMMENT "Configuring buildroot (overlay = ${overlay_dir})"
-)
-
+    COMMENT "Configuring buildroot (overlay = ${overlay_dir})"
+    )
+endif()
 
 ###############################################################################
 ## component: bootrom
@@ -174,7 +198,7 @@ add_custom_target("linux-config" DEPENDS ${linux_wrkdir}/.config)
 
 if(firesim)
   add_patch("linux" "linux${BITS}.firesim.patch" ${linux_srcdir} linux_patches)
-elseif(sifive)
+elseif(sifive OR vc707)
   add_patch("linux" "linux${BITS}.sifive.patch" ${linux_srcdir} linux_patches)
 else()
   add_patch("linux" "linux${BITS}.patch" ${linux_srcdir} linux_patches)
@@ -261,7 +285,9 @@ add_custom_target("image" DEPENDS "buildroot" "sm"
   COMMENT "Generating image"
 )
 
-add_dependencies("buildroot" "image-deps")
+if (initramfs)
+  add_dependencies("buildroot" "image-deps")
+endif()
 
 ###############################################################################
 ## PATCH
